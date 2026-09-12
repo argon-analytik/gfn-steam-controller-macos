@@ -1,14 +1,24 @@
-# Steam Controller (2026) gamepad fix for GeForce NOW on macOS
+# GFN Steam Controller for macOS
+
+<p align="center">
+  <img src="docs/assets/hero.png" alt="Steam Controller with Steam, macOS, and NVIDIA icons" width="900">
+</p>
+
+[![CI](https://github.com/argon-analytik/gfn-steam-controller-macos/actions/workflows/ci.yml/badge.svg)](https://github.com/argon-analytik/gfn-steam-controller-macos/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![macOS: Apple Silicon](https://img.shields.io/badge/macOS-Apple%20Silicon-111827.svg)](#requirements)
 
 If your Steam Controller works as mouse and keyboard input or in the GeForce NOW
 menu but is not detected as a gamepad inside streamed games on macOS, this
 project builds a separate, locally signed GFN app that routes Steam Input's
 virtual Xbox controller through GFN's HID backend.
 
-The fix was validated end to end on an Apple Silicon Mac: controller input works
-in the GeForce NOW interface and inside streamed games, with vibration during
-streamed gameplay. The original GFN app, Steam installation, and controller
-firmware are not modified; SIP and other macOS protections remain enabled.
+This community continuation is based on
+[`mikeqwe/gfn-steam-controller-fix`](https://github.com/mikeqwe/gfn-steam-controller-fix).
+It adds a Steam-managed launcher, a generated gamepad layout, R4-held gyro
+aiming, guarded Steam configuration updates, and stricter controller discovery.
+The original GFN patch, Steam installation, and controller firmware remain
+unchanged; SIP and other macOS protections stay enabled.
 
 > [!IMPORTANT]
 > This is an independent compatibility workaround, not an NVIDIA or Valve
@@ -30,11 +40,34 @@ firmware are not modified; SIP and other macOS protections remain enabled.
 - GFN interface input: working
 - streamed-game input: working
 - vibration during streamed gameplay: working
+- generated layout: left stick movement, right stick/trackpad camera, digital D-pad
+- gyro: direct mouse movement while R4 is held
+- wireless path: official 2.4 GHz Puck connected to the Mac over USB
 
 GFN `2.0.86.124` and `2.0.87.130`/`2.0.87.131` remain covered by exact
 instruction signatures. Other versions may work only when their input and
 haptic functions match a verified signature. The builder fails closed when
 they do not.
+
+Bluetooth `28de:1303` is accepted as an additional rumble target by this fork,
+but Bluetooth rumble has not received the same end-to-end gameplay validation
+as the Puck path.
+
+## What this fork adds
+
+- A small launcher that always starts the patched GFN runtime through Steam,
+  so Steam Input remains active for the complete session.
+- A generated Steam Controller layout with separate left/right stick outputs,
+  a digital D-pad, and the right trackpad mapped to camera control.
+- Continuous fine aiming as direct mouse movement while R4 is held. Releasing
+  R4 stops gyro output; the normal sticks, triggers, and trackpad remain intact.
+- Automatic discovery of the exact non-Steam shortcut and Steam account when
+  only one matching setup exists. No account identifiers are stored in this
+  repository.
+- Transactional profile updates with backups, drift checks, readback, and
+  rollback that preserves concurrent user edits.
+- Metadata-only device diagnostics and stricter filtering for Puck and
+  Bluetooth rumble collections.
 
 ## Why this is needed
 
@@ -81,6 +114,7 @@ driver.
 - an Apple Silicon Mac;
 - the official GeForce NOW app at `/Applications/GeForceNOW.app` for the
   initial installation;
+- Steam Controller (2026), normally connected through its official Puck;
 - Steam running with the controller configured to expose a virtual gamepad;
 - Xcode Command Line Tools (`cc`, `lipo`, `nm`, `otool`, and `codesign`).
 
@@ -99,6 +133,57 @@ are not required. The installer does not add a privileged helper or background
 service.
 
 ## Quick start
+
+### Steam-managed setup with the generated layout
+
+Build the patched copy into your user Applications folder:
+
+```sh
+./build.zsh
+```
+
+In Steam, choose **Games → Add a Non-Steam Game**, select
+`~/Applications/GeForceNOW-Steam-Controller.app`, and name the shortcut exactly:
+
+```text
+GeForce NOW (Steam Controller)
+```
+
+Connect the controller once so Steam creates its controller configuration.
+Then quit Steam and every GeForce NOW window. Preview the changes and apply them:
+
+```sh
+./configure-steam.py
+./configure-steam.py --apply
+```
+
+The tool discovers the matching local shortcut, moves the patched runtime into
+its private Application Support directory, installs the small Steam launcher at
+the original user-facing path, and creates the controller profiles. It refuses
+ambiguous shortcuts and running Steam/GFN processes. Every write receives a
+dated local backup.
+
+Open the launcher for future sessions:
+
+```sh
+open "$HOME/Applications/GeForceNOW-Steam-Controller.app"
+```
+
+If Steam uses a device-specific configset, pass its existing filename during
+the preview and apply steps:
+
+```sh
+./configure-steam.py --configset configset_DEVICE.vdf
+./configure-steam.py --configset configset_DEVICE.vdf --apply
+```
+
+Use `--account` or `--appid` only to resolve an otherwise ambiguous local Steam
+setup. These values are read locally and are never uploaded by the scripts.
+
+See [Steam-managed setup and recovery](docs/steam-managed-setup.md) for the
+installed paths, GFN update procedure, profile-only changes, and rollback.
+
+### Patch-only setup
 
 ```sh
 ./install.zsh
@@ -250,6 +335,10 @@ conflict.
 
 ## Updating GeForce NOW
 
+The steps below apply to the patch-only `/Applications` installation. For the
+Steam-managed launcher and generated layout, follow
+[Steam-managed setup and recovery](docs/steam-managed-setup.md#updating-geforce-now).
+
 1. Let either the official or patched copy finish its normal GFN update.
 2. Quit every GeForce NOW window.
 3. Run `./install.zsh` again.
@@ -290,6 +379,11 @@ function before updating the signature.
 
 ## Uninstall
 
+The command below removes the patch-only `/Applications` installation. The
+Steam-managed setup has a separate rollback because it also owns a Steam
+shortcut and controller profiles; see
+[Steam-managed setup and recovery](docs/steam-managed-setup.md#rolling-back-the-steam-managed-setup).
+
 Quit every GeForce NOW window, then run:
 
 ```sh
@@ -310,6 +404,7 @@ make uninstall-app # remove only the installed patched copy
 make repair-input-monitoring # reset stale vibration permission and relaunch
 make build-app     # low-level build into the user Applications folder
 make verify-app    # verify the system-installed patched copy
+make device-probe  # read matching controller metadata without opening devices
 make clean
 ```
 

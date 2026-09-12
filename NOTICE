@@ -1,6 +1,9 @@
 This project is an independent compatibility workaround and is not affiliated
 with, endorsed by, or supported by NVIDIA, Valve, Microsoft, or Apple.
 
+This repository continues work from mikeqwe/gfn-steam-controller-fix. The
+upstream Git history and MIT license are retained.
+
 The repository does not distribute GeForce NOW, Steam, SDL, or any other
 third-party application or library. Users must obtain GeForce NOW and Steam
 from their respective official sources.
@@ -9,3 +12,7 @@ GeForce NOW and NVIDIA are trademarks of NVIDIA Corporation. Steam and Valve
 are trademarks of Valve Corporation. Xbox and Microsoft are trademarks of
 Microsoft Corporation. Apple, macOS, and GameController are trademarks of
 Apple Inc. All other product names are the property of their respective owners.
+
+The visual assets under docs/assets contain product and platform imagery used
+for identification and project presentation. Those marks and images are not
+covered by the software's MIT license. See docs/assets/README.md.

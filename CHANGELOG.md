@@ -4,6 +4,17 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Added
+
+- Steam-managed launcher that retains the native arm64 shortcut and active
+  Steam Input context.
+- Generated GFN layout with distinct stick outputs, digital D-pad bindings,
+  right-trackpad camera control, and direct gyro-to-mouse aiming while R4 is held.
+- Automatic account and shortcut discovery for unambiguous Steam setups.
+- Guarded Steam configuration writes with backup, drift detection, readback,
+  rollback, and a gyro-only update mode.
+- Metadata-only device probe and optional Bluetooth rumble target filtering.
+
 ## [0.3.1] - 2026-09-01
 
 ### Changed

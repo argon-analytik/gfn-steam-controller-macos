@@ -2,10 +2,16 @@
 #define GFN_STEAM_HID_HAPTIC_BRIDGE_H
 
 #include <stdint.h>
+#include <stdbool.h>
+#include <IOKit/hid/IOHIDDevice.h>
 
 #define GFN_TRITON_RUMBLE_REPORT_SIZE 10
 
 uint16_t gfn_map_rumble_level(int level);
+bool gfn_is_supported_triton_output(
+    int vendor_id, int product_id, bool has_vendor_collection,
+    const char *transport);
+bool gfn_is_supported_output_device(IOHIDDeviceRef device);
 void gfn_build_triton_rumble_report(
     uint16_t low_frequency,
     uint16_t high_frequency,

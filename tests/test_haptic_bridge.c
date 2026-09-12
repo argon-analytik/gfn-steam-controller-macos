@@ -5,6 +5,21 @@
 #include <string.h>
 
 int main(void) {
+    // Only Steam Controller 2 vendor collections can receive rumble writes.
+    assert(gfn_is_supported_triton_output(0x28de, 0x1304, true, "USB"));
+    assert(gfn_is_supported_triton_output(0x28de, 0x1303, true, "Bluetooth"));
+    assert(gfn_is_supported_triton_output(
+        0x28de, 0x1303, true, "Bluetooth Low Energy"));
+    assert(!gfn_is_supported_triton_output(0x28de, 0x1303, false, "Bluetooth"));
+    assert(!gfn_is_supported_triton_output(0x28de, 0x1304, false, "USB"));
+    assert(!gfn_is_supported_triton_output(0x045e, 0x028e, true, "USB"));
+    assert(!gfn_is_supported_triton_output(0x28de, 0x1102, true, "USB"));
+    assert(!gfn_is_supported_triton_output(0x28de, 0x1303, true, "USB"));
+    assert(!gfn_is_supported_triton_output(0x28de, 0x1304, true, "Bluetooth"));
+    assert(!gfn_is_supported_triton_output(0x28de, 0x1303, true, NULL));
+    assert(!gfn_is_supported_triton_output(0x28de, 0x1303, true, ""));
+    assert(!gfn_is_supported_output_device(NULL));
+
     assert(gfn_map_rumble_level(-1) == 0);
     assert(gfn_map_rumble_level(0) == 0);
     assert(gfn_map_rumble_level(1) == 257);

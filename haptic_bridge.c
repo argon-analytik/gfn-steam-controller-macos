@@ -18,6 +18,9 @@
 
 #define STEAM_VENDOR_ID 0x28de
 #define STEAM_TRITON_PRODUCT_ID 0x1304
+#define STEAM_TRITON_BLUETOOTH_PRODUCT_ID 0x1303
+#define STEAM_TRITON_USAGE_PAGE 0xff00
+#define STEAM_TRITON_USAGE 0x01
 #define GFN_RUMBLE_MAX_LEVEL UINT8_MAX
 #define TRITON_RUMBLE_RESEND_MS 40
 #define MAX_HID_INTERFACES 16
@@ -107,6 +110,45 @@ static int number_property(IOHIDDeviceRef device, CFStringRef key) {
     return result;
 }
 
+bool gfn_is_supported_triton_output(
+    int vendor_id, int product_id, bool has_vendor_collection,
+    const char *transport) {
+    if (vendor_id != STEAM_VENDOR_ID || !has_vendor_collection ||
+        transport == NULL) {
+        return false;
+    }
+    if (product_id == STEAM_TRITON_PRODUCT_ID) {
+        return strcmp(transport, "USB") == 0;
+    }
+    if (product_id == STEAM_TRITON_BLUETOOTH_PRODUCT_ID) {
+        return strcmp(transport, "Bluetooth") == 0 ||
+               strcmp(transport, "Bluetooth Low Energy") == 0;
+    }
+    return false;
+}
+
+bool gfn_is_supported_output_device(IOHIDDeviceRef device) {
+    if (device == NULL ||
+        number_property(device, CFSTR(kIOHIDMaxOutputReportSizeKey)) <
+            GFN_TRITON_RUMBLE_REPORT_SIZE) {
+        return false;
+    }
+    CFTypeRef property = IOHIDDeviceGetProperty(
+        device, CFSTR(kIOHIDTransportKey));
+    char transport[64];
+    if (property == NULL || CFGetTypeID(property) != CFStringGetTypeID() ||
+        !CFStringGetCString((CFStringRef)property, transport, sizeof(transport),
+                            kCFStringEncodingUTF8)) {
+        return false;
+    }
+    return gfn_is_supported_triton_output(
+        number_property(device, CFSTR(kIOHIDVendorIDKey)),
+        number_property(device, CFSTR(kIOHIDProductIDKey)),
+        // Puck and Bluetooth are composite devices whose primary usage is mouse.
+        IOHIDDeviceConformsTo(device, STEAM_TRITON_USAGE_PAGE,
+                             STEAM_TRITON_USAGE), transport);
+}
+
 static void close_devices(struct bridge_devices *devices) {
     for (size_t i = 0; i < devices->count; ++i) {
         IOHIDDeviceClose(devices->devices[i], kIOHIDOptionsTypeNone);
@@ -147,32 +189,21 @@ static bool open_devices(struct bridge_devices *devices) {
     }
 
     int vendor = STEAM_VENDOR_ID;
-    int product = STEAM_TRITON_PRODUCT_ID;
     CFNumberRef vendor_number = CFNumberCreate(
         kCFAllocatorDefault, kCFNumberIntType, &vendor);
-    CFNumberRef product_number = CFNumberCreate(
-        kCFAllocatorDefault, kCFNumberIntType, &product);
-    if (vendor_number == NULL || product_number == NULL) {
-        if (vendor_number != NULL) {
-            CFRelease(vendor_number);
-        }
-        if (product_number != NULL) {
-            CFRelease(product_number);
-        }
+    if (vendor_number == NULL) {
         close_devices(devices);
         return false;
     }
 
     const void *keys[] = {
         CFSTR(kIOHIDVendorIDKey),
-        CFSTR(kIOHIDProductIDKey),
     };
-    const void *values[] = {vendor_number, product_number};
+    const void *values[] = {vendor_number};
     CFDictionaryRef matching = CFDictionaryCreate(
-        kCFAllocatorDefault, keys, values, 2,
+        kCFAllocatorDefault, keys, values, 1,
         &kCFTypeDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks);
     CFRelease(vendor_number);
-    CFRelease(product_number);
     if (matching == NULL) {
         close_devices(devices);
         return false;
@@ -201,8 +232,7 @@ static bool open_devices(struct bridge_devices *devices) {
     CFSetGetValues(set, items);
     for (CFIndex i = 0; i < count && devices->count < MAX_HID_INTERFACES; ++i) {
         IOHIDDeviceRef device = (IOHIDDeviceRef)items[i];
-        if (number_property(device, CFSTR(kIOHIDMaxOutputReportSizeKey)) <
-            GFN_TRITON_RUMBLE_REPORT_SIZE) {
+        if (!gfn_is_supported_output_device(device)) {
             continue;
         }
         if (IOHIDDeviceOpen(device, kIOHIDOptionsTypeNone) != kIOReturnSuccess) {

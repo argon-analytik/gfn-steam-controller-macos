@@ -1,0 +1,8 @@
+{
+  "bundle_id": "io.github.gfn-steam-controller-macos.launcher",
+  "executable": "GFNSteamLauncher",
+  "name": "GeForceNOW-Steam-Controller",
+  "display_name": "GeForce NOW (Steam Controller)",
+  "version": "1.0.0",
+  "build": "1"
+}
