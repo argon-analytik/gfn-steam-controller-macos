@@ -17,8 +17,9 @@ This community continuation is based on
 [`mikeqwe/gfn-steam-controller-fix`](https://github.com/mikeqwe/gfn-steam-controller-fix).
 It adds a Steam-managed launcher, a generated gamepad layout, R4-held gyro
 aiming, guarded Steam configuration updates, and stricter controller discovery.
-The original GFN patch, Steam installation, and controller firmware remain
-unchanged; SIP and other macOS protections stay enabled.
+The official GFN app, Steam application binaries, and controller firmware stay
+untouched; the setup changes only the dedicated shortcut and controller
+profiles. SIP and other macOS protections remain enabled.
 
 > [!IMPORTANT]
 > This is an independent compatibility workaround, not an NVIDIA or Valve
