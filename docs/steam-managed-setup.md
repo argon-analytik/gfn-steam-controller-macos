@@ -19,9 +19,10 @@ moves to:
 ~/Library/Application Support/gfn-steam-controller-macos/runtime/GeForceNOW-Steam-Controller.app
 ```
 
-The launcher asks Steam to start the runtime through the exact non-Steam
-shortcut. This keeps Steam Input active, forces the native arm64 executable,
-and selects the generated GFN controller profile.
+The launcher checks the private runtime, repairs supported NVIDIA updates, then
+asks Steam to start the same non-Steam shortcut. Steam starts a signed ARM64
+`steam-gfn-entry` helper beside the runtime. That helper uses `execv`, preserving
+Steam's process tracking and controller context. The shortcut's AppID stays the same.
 
 The setup edits only the matching non-Steam shortcut and its controller
 configuration. It does not change global Desktop or Guide Button layouts.
@@ -39,6 +40,7 @@ configuration. It does not change global Desktop or Guide Button layouts.
 
 4. Add `~/Applications/GeForceNOW-Steam-Controller.app` to Steam as a
    non-Steam game. Rename it exactly to `GeForce NOW (Steam Controller)`.
+   Steam may store the `.app` bundle or the executable inside it; both are accepted.
 5. Open the shortcut's controller settings once so Steam creates the local
    controller configuration. Quit Steam and every GFN window.
 6. Preview and apply the setup:
@@ -48,8 +50,14 @@ configuration. It does not change global Desktop or Guide Button layouts.
    ./configure-steam.py --apply
    ```
 
-The preview performs discovery and validation without writing. The apply step
+The preview performs discovery and validation and builds a temporary launcher;
+it does not change installed apps or Steam configuration. The apply step
 repeats the checks immediately before each transaction.
+
+Version 1.1.0 fixes the earlier “Shortcut identity changed” error for `.app`
+targets. Keep your existing shortcut and rerun setup from the updated repository.
+Existing installations receive the new launcher and native entrypoint through
+the same commands. Do not rebuild over the visible launcher with `./build.zsh`.
 
 If more than one Steam account contains the exact shortcut, select one with
 `--account`. If one account contains more than one matching shortcut, use
@@ -77,6 +85,15 @@ Direct mouse output avoids the streamed game's joystick deadzone. A game must
 accept mouse and gamepad input at the same time for this mode to work as
 intended.
 
+Gyro uses Player Space, combining yaw and roll for horizontal aiming while
+keeping pitch for vertical aiming. Its speed deadzone and precision threshold
+are zero, so small movements are not deliberately filtered out.
+
+For always-on gyro, use `--gyro-activation always` during setup or a gyro-only
+update. `--gyro-activation r4` restores hold-to-enable. `--gyro-output joystick`
+is an optional alternative for games that reject mixed input, but needs tuning
+to that game's joystick deadzone and camera curve. Mouse output remains the default.
+
 ## Backups and receipts
 
 Every applied setup or gyro-only change creates a directory below:
@@ -85,12 +102,20 @@ Every applied setup or gyro-only change creates a directory below:
 ~/Library/Application Support/gfn-steam-controller-macos/backups/
 ```
 
-`files.json` records each destination plus before/after SHA-256 hashes.
+`files.json` records each destination, file modes, and before/after SHA-256 hashes.
 `receipt.json` records the completed operation. Original Steam files are stored
 beside those manifests with restrictive local permissions. Do not publish this
 directory: its paths and Steam identifiers belong to the local account.
 
 ## Updating GeForce NOW
+
+The updated launcher verifies the private runtime before each new session. If
+NVIDIA replaced it with an unpatched, supported release, the launcher rebuilds
+and verifies it before starting Steam. A damaged custom build or unknown
+instruction signature stops with an error. Running streams are not replaced.
+The launcher log is `~/Library/Logs/gfn-steam-controller-macos/launcher.log`.
+
+For a manual update:
 
 1. Update the official `/Applications/GeForceNOW.app` first.
 2. Quit Steam and every GeForce NOW window.
@@ -124,8 +149,46 @@ Quit Steam and GFN, preview the change, then apply it:
 ./configure-steam.py --gyro-only --apply
 ```
 
+For continuous aiming without R4:
+
+```sh
+./configure-steam.py --gyro-only --gyro-activation always
+./configure-steam.py --gyro-only --gyro-activation always --apply
+```
+
 This mode changes only the known GFN gyro group and profile metadata. It
 preserves the remaining controls, Steam shortcut, launcher, and NVIDIA runtime.
+
+## Duplicate controller input
+
+If Steam shows a second Apple-provided controller as well as Valve's Steam
+Controller, it can interfere with input routing. For that specific condition,
+`repair-controller-duplicates.py` can add `05ac/0004` to Steam's controller
+exclusion list, preserving existing entries and backing up the configuration:
+
+```sh
+./repair-controller-duplicates.py
+./repair-controller-duplicates.py --apply
+```
+
+Quit Steam and GFN first. This optional change applies to Steam's device list,
+not only the GFN shortcut. It is not part of the normal setup.
+
+## Optional Game Mode workaround
+
+The patched GFN bundle opts out of Game Mode. The community launcher does not
+change the Mac's global Game Mode policy. A separate `game-mode-guard.zsh` is
+available for troubleshooting the macOS 27 hangs observed on the maintainer's
+machine; their exact cause has not been established.
+
+Running it explicitly forces Game Mode off for the **whole Mac** and needs
+Xcode's `gamepolicyctl`. To restore automatic Game Mode after quitting GFN:
+
+```sh
+xcrun gamepolicyctl game-mode set auto
+```
+
+The community launcher leaves that restored policy alone.
 
 ## Rolling back the Steam-managed setup
 
@@ -138,6 +201,7 @@ not a `-gyro` backup.
 2. Restore every numbered original to the exact destination listed in
    `files.json`. Remove a destination only when its manifest entry has
    `original: null` and its current hash still matches `after_sha256`.
+   Restore `original_mode` for an existing native entrypoint as well.
 3. Remove the small launcher at
    `~/Applications/GeForceNOW-Steam-Controller.app`.
 4. Move the private runtime from Application Support back to that user
@@ -147,3 +211,8 @@ not a `-gyro` backup.
 
 The patch-only `/Applications` install is independent and can still be removed
 with `./uninstall.zsh`.
+
+For a launcher **upgrade**, keep the runtime in place and restore the saved
+`previous-launcher.app` instead of moving the runtime back. `receipt.json`
+distinguishes these cases through `runtime_moved`. Never replace newer user
+changes with an older backup.

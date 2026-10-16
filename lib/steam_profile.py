@@ -6,8 +6,15 @@ import struct
 
 GFN_NAME = 'GeForce NOW (Steam Controller)'
 PROFILE_TITLE = 'GFN - Gamepad + R4 Gyro Aiming'
-PROFILE_DESCRIPTION = 'Left stick: movement. Right stick/trackpad: camera. Hold R4 for gentle gyro aiming.'
+PROFILE_DESCRIPTION = 'Left stick: movement. Right stick/trackpad: camera. Gentle gyro aiming while R4 is held.'
+ALWAYS_ON_TITLE = 'GFN - Gamepad + Always-on Gyro'
+ALWAYS_ON_DESCRIPTION = 'Left stick: movement. Right stick/trackpad: camera. Gentle gyro aiming is always active.'
 FINE_GYRO_MODE = 'gyro_to_mouse'
+GYRO_OUTPUT_MODES = {'mouse': FINE_GYRO_MODE, 'joystick': 'gyro_to_joystick'}
+# Shared by the native GFN and CrossOver profile installers. Valve's UI maps
+# 4 to Player Space: gravity-aware horizontal yaw/roll, local vertical pitch.
+GYRO_AXIS_KEY = 'gyro_to_2d_conversion_style'
+GYRO_PLAYER_SPACE = '4'
 # Verified against Valve's installed UI: R4 = upper right rear grip, mask bit 42.
 # The legacy gyro selector uses 24 (a different enum from physical input IDs).
 FINE_GYRO_SETTINGS = [
@@ -16,6 +23,7 @@ FINE_GYRO_SETTINGS = [
     ('gyro_use_per_controller_preferences', '0'), ('gyro_natural_sensitivity', '50'),
     ('gyro_speed_deadzone', '0'), ('gyro_precision_speed', '0'),
     ('acceleration', '0'), ('trackball', '0'),
+    (GYRO_AXIS_KEY, GYRO_PLAYER_SPACE),
 ]
 
 
@@ -95,7 +103,24 @@ def dump(pairs, depth=0):
     return '\n'.join(lines) + '\n'
 
 
-def gamepad_profile(template, controller_type, account, destination):
+def fine_gyro_settings(always_on=False, gyro_output='mouse'):
+    if gyro_output not in GYRO_OUTPUT_MODES:
+        raise ValueError('Unknown gyro output')
+    settings = copy.deepcopy(FINE_GYRO_SETTINGS)
+    if always_on:
+        # Valve: empty mask / legacy GyroNone (0) means Always On. No clutch
+        # button and no toggle; suppress-on-hold with no buttons is unconditional.
+        for key in ('gyro_ratchet_button_mask', 'gyro_button', 'gyro_button_invert'):
+            put(settings, key, '0')
+    if gyro_output == 'joystick':
+        settings += [('output_joystick', '1'), ('gyro_speed_to_joystick_min', '0'),
+                     ('gyro_to_joystick_enable_angle_catchup', '0')]
+    return settings
+
+
+def gamepad_profile(template, controller_type, account, destination, *, always_on=False, gyro_output='mouse'):
+    if gyro_output not in GYRO_OUTPUT_MODES:
+        raise ValueError('Unknown gyro output')
     doc = copy.deepcopy(parse(template))
     root = get(doc, 'controller_mappings')
     if get(root, 'controller_type') != 'controller_neptune':
@@ -145,14 +170,14 @@ def gamepad_profile(template, controller_type, account, destination):
         raise ValueError("Template already has a gyro binding; review it first")
     gyro_id = str(max(map(int, groups)) + 1)
     root.append(('group', [
-        ('id', gyro_id), ('mode', FINE_GYRO_MODE), ('inputs', []),
-        ('settings', copy.deepcopy(FINE_GYRO_SETTINGS)),
+        ('id', gyro_id), ('mode', GYRO_OUTPUT_MODES[gyro_output]), ('inputs', []),
+        ('settings', fine_gyro_settings(always_on, gyro_output)),
     ]))
     bindings.append((gyro_id, 'gyro active'))
     for key, value in [
         ('game', GFN_NAME),
-        ('title', PROFILE_TITLE),
-        ('description', PROFILE_DESCRIPTION),
+        ('title', ALWAYS_ON_TITLE if always_on else PROFILE_TITLE),
+        ('description', ALWAYS_ON_DESCRIPTION if always_on else PROFILE_DESCRIPTION),
         ('controller_type', controller_type), ('revision', '1'),
         ('creator', str(76561197960265728 + int(account))),
         ('progenitor', 'template://controller_neptune_gamepad_fps.vdf'),
@@ -161,10 +186,25 @@ def gamepad_profile(template, controller_type, account, destination):
         put(root, key, value)
     # Localized template descriptions must not obscure the new profile's title.
     root[:] = [(k, v) for k, v in root if k != 'localization']
+    if gyro_output == 'joystick':
+        put(root, 'description', get(root, 'description') + ' Gyro-Ausgabe über den rechten Controllerstick.')
     return dump(doc).encode()
 
 
-def retune_gyro_profile(data):
+def configure_fine_gyro_group(group, *, always_on=False, gyro_output='mouse'):
+    """Apply shared Player Space tuning with an explicit activation choice."""
+    settings = get(group, 'settings', [])
+    # Rebuild output-specific settings; switching back to mouse removes stick
+    # routing, and switching to joystick must not resurrect stale range tuning.
+    settings[:] = [(k, v) for k, v in settings
+                   if k != 'output_joystick' and not k.startswith(('gyro_to_joystick_', 'gyro_speed_to_joystick_', 'gyro_deflection_to_joystick_'))]
+    for key, value in fine_gyro_settings(always_on, gyro_output):
+        put(settings, key, value)
+    put(group, 'mode', GYRO_OUTPUT_MODES[gyro_output])
+    put(group, 'settings', settings)
+
+
+def retune_gyro_profile(data, *, always_on=False, gyro_output='mouse'):
     """Change only gyro settings and profile metadata, preserving the working layout."""
     doc = parse(data.decode('utf-8-sig'))
     root = get(doc, 'controller_mappings')
@@ -180,16 +220,11 @@ def retune_gyro_profile(data):
     if len(gyro_ids) != 1 or len(groups) != 1 or all_gyros != groups or get(groups[0], 'mode') not in ['gyro_to_joystick', 'gyro_to_mouse']:
         raise ValueError('Expected exactly one existing analog GFN gyro source')
     before = copy.deepcopy(doc)
-    settings = get(groups[0], 'settings', [])
-    # A direct mouse gyro must not retain any old stick-output/range settings.
-    settings[:] = [(k, v) for k, v in settings
-                   if k != 'output_joystick' and not k.startswith(('gyro_to_joystick_', 'gyro_speed_to_joystick_', 'gyro_deflection_to_joystick_'))]
-    for key, value in FINE_GYRO_SETTINGS:
-        put(settings, key, value)
-    put(groups[0], 'mode', FINE_GYRO_MODE)
-    put(groups[0], 'settings', settings)
-    put(root, 'title', PROFILE_TITLE)
-    put(root, 'description', PROFILE_DESCRIPTION)
+    configure_fine_gyro_group(groups[0], always_on=always_on, gyro_output=gyro_output)
+    put(root, 'title', ALWAYS_ON_TITLE if always_on else PROFILE_TITLE)
+    put(root, 'description', ALWAYS_ON_DESCRIPTION if always_on else PROFILE_DESCRIPTION)
+    if gyro_output == 'joystick':
+        put(root, 'description', get(root, 'description') + ' Gyro-Ausgabe über den rechten Controllerstick.')
     if doc == before:
         return data
     put(root, 'revision', str(int(get(root, 'revision', '0')) + 1))
@@ -245,11 +280,11 @@ def shortcut_spans(data):
 
 
 def shortcut_appids(data, appname=GFN_NAME):
-    """Return AppIDs for exact-name shortcuts without exposing other entries."""
+    """Discover exact-name shortcuts without exposing unrelated account data."""
     root = shortcut_spans(data)
     if len(root) != 1 or root[0][:2] != ('shortcuts', 0):
         raise ValueError("Expected shortcuts root")
-    appids = []
+    result = []
     for _, kind, rows, _, _ in root[0][2]:
         if kind != 0:
             raise ValueError("Unexpected shortcut entry")
@@ -257,11 +292,11 @@ def shortcut_appids(data, appname=GFN_NAME):
         if len(values) != len(rows):
             raise ValueError("Duplicate shortcut field")
         if values.get('appname') == appname and isinstance(values.get('appid'), int):
-            appids.append(values['appid'])
-    return appids
+            result.append(values['appid'])
+    return result
 
 
-def patch_shortcut(data, appid, runtime, visible=None):
+def patch_shortcut(data, appid, runtime, entrypoint=None, *, visible=None):
     root = shortcut_spans(data)
     if len(root) != 1 or root[0][:2] != ('shortcuts', 0):
         raise ValueError("Expected shortcuts root")
@@ -277,17 +312,31 @@ def patch_shortcut(data, appid, runtime, visible=None):
     if len(candidates) != 1:
         raise ValueError("Expected exactly one matching Steam shortcut")
     rows, values = candidates[0]
-    accepted_executables = {'"/usr/bin/arch"'}
+    native_entry = runtime.parent / 'steam-gfn-entry'
+    # macOS Steam can store either the .app bundle or its executable. Accept
+    # only our exact paths, with or without Steam's outer quote pair.
+    allowed = {'/usr/bin/arch', str(native_entry), str(runtime),
+               str(runtime / 'Contents/MacOS/GeForceNOW')}
     if visible is not None:
-        accepted_executables.add('"' + str(visible / 'Contents/MacOS/GeForceNOW') + '"')
-    if values.get('appname') != GFN_NAME or values.get('exe') not in accepted_executables:
+        allowed.update([str(visible), str(visible / 'Contents/MacOS/GeForceNOW')])
+    executable_field = values.get('exe')
+    if isinstance(executable_field, str) and executable_field.startswith('"') and executable_field.endswith('"'):
+        executable_field = executable_field[1:-1]
+    if values.get('appname') != GFN_NAME or not isinstance(executable_field, str) or executable_field not in allowed:
         raise ValueError("Shortcut identity changed")
+    if entrypoint is not None and entrypoint != native_entry:
+        raise ValueError('Unexpected Steam entrypoint')
     executable = str(runtime / 'Contents/MacOS/GeForceNOW')
     if any(c in executable for c in ['"', '\n', '\r', '\0']):
         raise ValueError("Unsupported runtime path")
     edits = {'exe': '"/usr/bin/arch"',
              'startdir': '"' + str(runtime / 'Contents/MacOS') + '"',
              'launchoptions': '-arm64 "' + executable + '"'}
+    if entrypoint is not None or executable_field == str(native_entry):
+        if any(c in str(native_entry) for c in ['"', '\n', '\r', '\0']):
+            raise ValueError('Unsupported entrypoint path')
+        edits['exe'] = '"' + str(native_entry) + '"'
+        edits['launchoptions'] = '"' + executable + '"'
     replacements = []
     for key, kind, _, start, end in rows:
         if key.lower() in edits:

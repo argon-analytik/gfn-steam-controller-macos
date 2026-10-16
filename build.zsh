@@ -86,6 +86,9 @@ display_name="GeForceNOW-Steam-Controller"
 info_plist="$staged_app/Contents/Info.plist"
 /usr/libexec/PlistBuddy -c \
     "Set :CFBundleDisplayName $display_name" "$info_plist"
+# macOS 27.0.1: Game Mode's background coalition policy can deadlock
+# RunningBoard and WindowServer. Opt out only this streaming-client copy.
+/usr/bin/plutil -replace LSSupportsGameMode -bool NO "$info_plist"
 for localized_info in "$staged_app"/Contents/Resources/*.lproj/InfoPlist.strings(N); do
     /usr/libexec/PlistBuddy -c \
         "Set :CFBundleDisplayName $display_name" "$localized_info"

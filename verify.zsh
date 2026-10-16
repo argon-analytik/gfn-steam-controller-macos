@@ -41,6 +41,12 @@ if [[ "$actual_display_name" != "$expected_display_name" ]]; then
     print -u2 "Unexpected Finder display name: $actual_display_name"
     exit 1
 fi
+game_mode_supported="$(/usr/bin/plutil -extract LSSupportsGameMode raw \
+    -expect bool -o - "$APP/Contents/Info.plist")"
+if [[ "$game_mode_supported" != false ]]; then
+    print -u2 'The patched runtime must opt out of macOS Game Mode.'
+    exit 1
+fi
 for localized_info in "$APP"/Contents/Resources/*.lproj/InfoPlist.strings(N); do
     localized_display_name="$(/usr/libexec/PlistBuddy -c \
         'Print :CFBundleDisplayName' "$localized_info")"
@@ -121,4 +127,5 @@ print "$APP"
 print "GCDeviceInit arm64 file offset: $file_offset_hex"
 print "Forge haptic offsets: $is_rumble_offset_hex, $set_rumble_offset_hex"
 print "Steam Controller haptic bridge re-export: verified"
+print "Game Mode opt-out declared; runtime policy must be checked separately"
 print "Finder display name: $actual_display_name"

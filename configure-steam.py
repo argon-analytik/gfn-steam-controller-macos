@@ -13,7 +13,7 @@ import sys
 import tempfile
 
 sys.path.insert(0, str(Path(__file__).resolve().parent / 'lib'))
-from steam_profile import bind_autosave, gamepad_profile, patch_shortcut, retune_gyro_profile, shortcut_appids, FINE_GYRO_MODE
+from steam_profile import bind_autosave, gamepad_profile, patch_shortcut, retune_gyro_profile, shortcut_appids, GYRO_OUTPUT_MODES, GYRO_PLAYER_SPACE
 
 
 def validate_launcher_info(info, gameid, runtime):
@@ -76,7 +76,9 @@ def discover_target(steam, account=None, appid=None):
 
 
 def install_transaction(visible, runtime, launcher, changes, originals, backup,
-                        preflight=stopped, verify=verify_runtime):
+                        preflight=stopped, verify=verify_runtime, modes=None):
+    modes = modes or {}
+    original_modes = {path: path.stat().st_mode & 0o777 for path in originals if path.exists()}
     staged = visible.with_name(visible.name + '.staging-' + backup.name)
     if staged.exists():
         raise RuntimeError('Staging target already exists')
@@ -98,7 +100,7 @@ def install_transaction(visible, runtime, launcher, changes, originals, backup,
         staged.rename(visible)
         wrapper_installed = True
         for path, data in changes.items():
-            atomic_write(path, data)
+            atomic_write(path, data, modes.get(path, 0o600))
             written.append(path)
             if path.read_bytes() != data:
                 raise RuntimeError('Steam configuration readback failed')
@@ -112,7 +114,7 @@ def install_transaction(visible, runtime, launcher, changes, originals, backup,
             elif originals[path] is None:
                 path.unlink()
             else:
-                atomic_write(path, originals[path])
+                atomic_write(path, originals[path], original_modes[path])
         if wrapper_installed:
             shutil.rmtree(visible)
         if runtime_moved:
@@ -134,6 +136,10 @@ def main():
     ap.add_argument('--appid', type=int, help='non-Steam shortcut AppID; discovered automatically when omitted')
     ap.add_argument('--launcher', type=Path)
     ap.add_argument('--gyro-only', action='store_true', help='Retune existing GFN gyro profiles without replacing apps or other controls')
+    ap.add_argument('--gyro-activation', choices=['r4', 'always'], default='r4',
+                    help='Hold R4 for gyro (default), or keep gyro always active')
+    ap.add_argument('--gyro-output', choices=['mouse', 'joystick'], default='mouse',
+                    help='Direct mouse aiming (default); joystick needs per-game deadzone tuning')
     ap.add_argument('--configset', action='append', default=[], help='Additional existing configset filename')
     ap.add_argument('--apply', action='store_true')
     args = ap.parse_args()
@@ -151,13 +157,13 @@ def main():
         raise ValueError('Existing Steam account/shortcut configuration not found')
     if args.gyro_only:
         # Validate the shortcut identity, but do not write its launch path.
-        patch_shortcut(shortcuts.read_bytes(), appid, runtime, visible)
+        patch_shortcut(shortcuts.read_bytes(), appid, runtime, visible=visible)
         paths = sorted((config/'geforce now (steam controller)').glob('*.vdf'))
         if not paths:
             raise ValueError('Existing GFN profiles not found')
         # Also remove the previous gyro assignment from our unused numeric profiles.
         paths += sorted((config/str(appid)).glob('*.vdf'))
-        retune_profiles(paths, args.apply)
+        retune_profiles(paths, args.apply, always_on=args.gyro_activation == 'always', gyro_output=args.gyro_output)
         return
     expected_gameid = str((appid << 32) | 0x02000000)
     launcher_temp = None
@@ -171,6 +177,12 @@ def main():
         info = plistlib.load(f)
     validate_launcher_info(info, expected_gameid, runtime)
     subprocess.run(['/usr/bin/codesign', '--verify', '--strict', str(launcher)], check=True)
+    bundled_entry = launcher / 'Contents/Resources/SteamEntry/steam-gfn-entry'
+    if not bundled_entry.is_file() or bundled_entry.is_symlink():
+        raise ValueError('Rebuild the launcher: the native Steam entrypoint is missing')
+    subprocess.run(['/usr/bin/codesign', '--verify', '--strict', str(bundled_entry)], check=True)
+    if subprocess.check_output(['/usr/bin/lipo', '-archs', str(bundled_entry)], text=True).strip() != 'arm64':
+        raise ValueError('Expected an ARM64-only Steam entrypoint')
     source_runtime = runtime if runtime.exists() else visible
     verify_runtime(source_runtime)
     if runtime.exists():
@@ -180,14 +192,20 @@ def main():
     template = (client/'controller_base/templates/controller_neptune_gamepad_fps.vdf').read_text(encoding='utf-8-sig')
     originals = {}
     changes = {}
-    changes[shortcuts] = patch_shortcut(shortcuts.read_bytes(), appid, runtime, visible)
+    entrypoint = runtime.parent / 'steam-gfn-entry'
+    changes[entrypoint] = bundled_entry.read_bytes()
+    changes[shortcuts] = patch_shortcut(shortcuts.read_bytes(), appid, runtime, entrypoint, visible=visible)
     # Steam's non-Steam controller configurations are keyed by the shortcut's
     # lower-case name. The numeric AppID is only the process/launch identity.
     profile_key = 'geforce now (steam controller)'
     for controller in ['controller_triton', 'controller_neptune']:
         profile = config / profile_key / (controller + '.vdf')
-        changes[profile] = gamepad_profile(template, controller, account, profile)
-    configsets = ['configset_controller_triton.vdf', 'configset_controller_neptune.vdf'] + args.configset
+        changes[profile] = gamepad_profile(template, controller, account, profile,
+                                          always_on=args.gyro_activation == 'always', gyro_output=args.gyro_output)
+    configsets = [name for name in ['configset_controller_triton.vdf', 'configset_controller_neptune.vdf']
+                  if (config / name).is_file()] + args.configset
+    if not configsets:
+        raise ValueError('Open this shortcut\'s controller layout in Steam once, then quit Steam and retry')
     for filename in dict.fromkeys(configsets):
         if Path(filename).name != filename or not filename.startswith('configset_') or not filename.endswith('.vdf'):
             raise ValueError('Invalid configset filename')
@@ -202,49 +220,59 @@ def main():
             if stem.startswith('controller_'):
                 raise ValueError('Only Steam Controller 2 configsets are supported')
             profile = config / profile_key / (stem + '.vdf')
-            changes[profile] = gamepad_profile(template, 'controller_triton', account, profile)
+            changes[profile] = gamepad_profile(template, 'controller_triton', account, profile,
+                                              always_on=args.gyro_activation == 'always', gyro_output=args.gyro_output)
     for path in [visible, runtime, launcher, *changes]:
         if path.is_symlink() or any(p.is_symlink() for p in path.parents):
             raise ValueError('Refusing symlink targets')
     for path in changes:
         originals[path] = path.read_bytes() if path.exists() else None
     print(json.dumps({'apply': args.apply, 'files': len(changes), 'gameid': expected_gameid,
-                      'runtime_move': not runtime.exists(), 'gyro_activation': 'R4 held', 'gyro_output': FINE_GYRO_MODE}))
+                      'runtime_move': not runtime.exists(), 'native_steam_entrypoint': True,
+                      'gyro_activation': 'always' if args.gyro_activation == 'always' else 'R4 held',
+                      'gyro_output': GYRO_OUTPUT_MODES[args.gyro_output], 'gyro_orientation': 'Player Space'}))
     if not args.apply:
         return
     stopped()
-    backup = runtime_root / 'backups' / datetime.datetime.now().strftime('%Y%m%d-%H%M%S')
+    backup = runtime_root / 'backups' / datetime.datetime.now().strftime('%Y%m%d-%H%M%S-%f')
     backup.mkdir(parents=True, mode=0o700)
     for index, (path, data) in enumerate(originals.items()):
         if data is not None:
             atomic_write(backup / f'{index}.original', data)
     manifest = [{'path': str(p), 'original': f'{i}.original' if data is not None else None,
+                 'original_mode': p.stat().st_mode & 0o777 if data is not None else None,
+                 'installed_mode': 0o755 if p == entrypoint else 0o600,
                  'before_sha256': hashlib.sha256(data).hexdigest() if data is not None else None,
                  'after_sha256': hashlib.sha256(changes[p]).hexdigest()}
                 for i, (p, data) in enumerate(originals.items())]
     atomic_write(backup/'files.json', json.dumps(manifest, indent=2).encode())
     def verify_install(path):
         subprocess.run(['/usr/bin/codesign', '--verify', '--strict', str(visible)], check=True)
+        subprocess.run(['/usr/bin/codesign', '--verify', '--strict', str(entrypoint)], check=True)
+        if entrypoint.stat().st_mode & 0o777 != 0o755:
+            raise RuntimeError('Native Steam entrypoint is not executable')
         verify_runtime(path)
     runtime_moved = install_transaction(visible, runtime, launcher, changes, originals, backup,
-                                        verify=verify_install)
+                                        verify=verify_install, modes={entrypoint: 0o755})
     atomic_write(backup/'receipt.json', json.dumps({'installed': True, 'runtime_moved': runtime_moved,
                   'gameid': expected_gameid, 'physical_gameplay_verified': False}, indent=2).encode())
     print('Installed. Backup and receipt: ' + str(backup))
 
 
-def retune_profiles(paths, apply):
+def retune_profiles(paths, apply, *, always_on=False, gyro_output='mouse'):
     originals = {}
     changes = {}
     for path in paths:
         if path.is_symlink() or any(p.is_symlink() for p in path.parents):
             raise ValueError('Refusing symlink targets')
         data = path.read_bytes()
-        changed = retune_gyro_profile(data)
+        changed = retune_gyro_profile(data, always_on=always_on, gyro_output=gyro_output)
         if changed != data:
             originals[path] = data
             changes[path] = changed
-    print(json.dumps({'apply': apply, 'profiles': len(changes), 'gyro_activation': 'R4 held', 'gyro_output': FINE_GYRO_MODE,
+    activation = 'always' if always_on else 'R4 held'
+    print(json.dumps({'apply': apply, 'profiles': len(changes), 'gyro_activation': activation, 'gyro_output': GYRO_OUTPUT_MODES[gyro_output],
+                      'gyro_orientation': 'Player Space', 'gyro_orientation_value': GYRO_PLAYER_SPACE,
                       'other_controls_changed': False, 'app_replacement': False}))
     if not apply or not changes:
         return
@@ -280,7 +308,8 @@ def retune_profiles(paths, apply):
         if drifted:
             raise RuntimeError('Concurrent edits preserved; inspect backup ' + str(backup)) from error
         raise
-    atomic_write(backup/'receipt.json', json.dumps({'installed': True, 'gyro_activation': 'R4 held', 'gyro_output': FINE_GYRO_MODE,
+    atomic_write(backup/'receipt.json', json.dumps({'installed': True, 'gyro_activation': activation, 'gyro_output': GYRO_OUTPUT_MODES[gyro_output],
+                  'gyro_orientation': 'Player Space', 'gyro_orientation_value': GYRO_PLAYER_SPACE,
                   'other_controls_changed': False, 'physical_gyro_verified': False}, indent=2).encode())
     print('Gyro updated. Backup and receipt: ' + str(backup))
 

@@ -1,5 +1,31 @@
 # Technical notes
 
+## Steam shortcut and launcher
+
+Steam may record a macOS non-Steam game as its `.app` bundle or as the binary
+inside that bundle. Setup accepts those exact paths for the configured GFN
+copy, not arbitrary `.app` suffixes. It preserves the shortcut's AppID and
+rewrites its target to a small ARM64 helper beside the private runtime.
+
+The helper replaces itself with GFN through `execv`, keeping the PID and Steam
+parent relationship. The previous `/usr/bin/arch -arm64` target could fail with
+Steam's process-spawn error. Calling `open` would delegate startup to LaunchServices
+and lose this direct process relationship, so it is not used as the game target.
+
+Before launching Steam, the visible launcher verifies the runtime. Repair uses
+the existing staged build, exact signature checks, and guarded replacement
+transaction. Unsupported updates leave the current runtime intact. The helper
+also rejects a GFN runtime whose bridge marker is missing.
+
+## Gyro
+
+The generated layout uses Valve's Player Space conversion
+(`gyro_to_2d_conversion_style=4`) and direct mouse output, with sensitivity 50,
+zero speed deadzone, and zero precision threshold. This avoids the streamed
+game's joystick deadzone and makes yaw/roll contribute to horizontal aiming
+according to the controller's orientation. R4 is the default activation;
+always-on is explicit. A game must support simultaneous mouse and gamepad input.
+
 ## Input path observed on the test machine
 
 ```text

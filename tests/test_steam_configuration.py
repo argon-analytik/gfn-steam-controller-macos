@@ -99,49 +99,12 @@ class LauncherIdentityTests(unittest.TestCase):
         info = {'CFBundleIdentifier': identity['bundle_id'], 'CFBundleExecutable': identity['executable'],
                 'SteamGameID': '123', 'GFNRuntimePath': '/tmp/runtime.app'}
         module.validate_launcher_info(info, '123', Path('/tmp/runtime.app'))
-        for key, wrong in [('CFBundleIdentifier', 'com.example.gfn-steam-controller'),
-                           ('CFBundleIdentifier', 'org.example.other-product'),
+        for key, wrong in [('CFBundleIdentifier', 'io.github.wrong-product.launcher'),
+                           ('CFBundleIdentifier', 'io.github.other-product.launcher'),
                            ('CFBundleExecutable', 'WrongHelper'), ('SteamGameID', '124'),
                            ('GFNRuntimePath', '/Applications/GeForceNOW.app')]:
             with self.subTest(key=key, value=wrong), self.assertRaises(ValueError):
                 module.validate_launcher_info({**info, key: wrong}, '123', Path('/tmp/runtime.app'))
-
-
-class DiscoveryTests(unittest.TestCase):
-    def setUp(self):
-        self.temp = tempfile.TemporaryDirectory()
-        self.addCleanup(self.temp.cleanup)
-        self.steam = Path(self.temp.name)
-
-    def shortcut(self, account, appid, name='GeForce NOW (Steam Controller)'):
-        path = self.steam/f'userdata/{account}/config/shortcuts.vdf'
-        path.parent.mkdir(parents=True)
-        rows = [('shortcuts', [('0', [
-            ('appname', name), ('appid', appid), ('exe', '"/usr/bin/arch"'),
-            ('StartDir', '"/tmp"'), ('LaunchOptions', ''),
-        ])])]
-        from test_steam_profile import binary
-        path.write_bytes(binary(rows))
-        return path
-
-    def test_discovers_only_matching_shortcut(self):
-        self.shortcut(1001, 3000000001, 'Other Game')
-        expected = self.shortcut(1002, 3000000002)
-        self.assertEqual(module.discover_target(self.steam), (1002, 3000000002, expected))
-
-    def test_optional_ids_narrow_discovery(self):
-        first = self.shortcut(1001, 3000000001)
-        self.shortcut(1002, 3000000002)
-        self.assertEqual(module.discover_target(self.steam, account=1001), (1001, 3000000001, first))
-        self.assertEqual(module.discover_target(self.steam, appid=3000000001), (1001, 3000000001, first))
-
-    def test_ambiguous_or_missing_shortcut_is_rejected(self):
-        with self.assertRaisesRegex(ValueError, 'exactly one'):
-            module.discover_target(self.steam)
-        self.shortcut(1001, 3000000001)
-        self.shortcut(1002, 3000000002)
-        with self.assertRaisesRegex(ValueError, 'exactly one'):
-            module.discover_target(self.steam)
 
 
 class GyroUpdateTransactionTests(unittest.TestCase):

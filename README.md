@@ -15,8 +15,8 @@ virtual Xbox controller through GFN's HID backend.
 
 This community continuation is based on
 [`mikeqwe/gfn-steam-controller-fix`](https://github.com/mikeqwe/gfn-steam-controller-fix).
-It adds a Steam-managed launcher, a generated gamepad layout, R4-held gyro
-aiming, guarded Steam configuration updates, and stricter controller discovery.
+It adds a Steam-managed launcher, a generated gamepad layout, Player Space gyro
+aiming, guarded Steam configuration updates, and repair after supported GFN updates.
 The official GFN app, Steam application binaries, and controller firmware stay
 untouched; the setup changes only the dedicated shortcut and controller
 profiles. SIP and other macOS protections remain enabled.
@@ -34,18 +34,22 @@ profiles. SIP and other macOS protections remain enabled.
 
 ## Tested configuration
 
-- GeForce NOW `2.0.88.129`
-- macOS `26.5.2` on a Mac mini (M4)
+- GeForce NOW `2.0.89.141`; earlier tests used `2.0.88.129`
+- macOS `27.0.1` on a Mac mini (M4); earlier tests used `26.5.2`
 - Steam Controller hardware `28de:1304`
 - Steam virtual `GamePad-1` HID `045e:028e`
 - GFN interface input: working
 - streamed-game input: working
 - vibration during streamed gameplay: working
 - generated layout: left stick movement, right stick/trackpad camera, digital D-pad
-- gyro: direct mouse movement while R4 is held
+- gyro: direct mouse movement in Player Space; R4 held by default, always-on optional
 - wireless path: official 2.4 GHz Puck connected to the Mac over USB
 
-GFN `2.0.86.124` and `2.0.87.130`/`2.0.87.131` remain covered by exact
+These are the maintainer's gameplay results. The updated community installer
+also has automated coverage for fresh installs, upgrades, and rollback; it
+still needs testing on other Macs and games.
+
+GFN `2.0.86.124`, `2.0.87.130`/`2.0.87.131`, and `2.0.88.129` remain covered by exact
 instruction signatures. Other versions may work only when their input and
 haptic functions match a verified signature. The builder fails closed when
 they do not.
@@ -57,11 +61,15 @@ as the Puck path.
 ## What this fork adds
 
 - A small launcher that always starts the patched GFN runtime through Steam,
-  so Steam Input remains active for the complete session.
+  so Steam Input remains active for the complete session. A native ARM64 helper
+  replaces the older `/usr/bin/arch` route that Steam could fail to launch.
 - A generated Steam Controller layout with separate left/right stick outputs,
   a digital D-pad, and the right trackpad mapped to camera control.
-- Continuous fine aiming as direct mouse movement while R4 is held. Releasing
-  R4 stops gyro output; the normal sticks, triggers, and trackpad remain intact.
+- Fine aiming as direct mouse movement in Player Space, combining horizontal
+  yaw and roll for more natural movement at different controller angles.
+  Hold R4 by default, or choose always-on gyro. Normal gamepad controls remain intact.
+- Automatic repair when a supported NVIDIA update removes the controller patch.
+  Unknown binaries stop before replacement; active streams are not rebuilt.
 - Automatic discovery of the exact non-Steam shortcut and Steam account when
   only one matching setup exists. No account identifiers are stored in this
   repository.
@@ -97,6 +105,24 @@ GFN's HID backend instead.
 First choose a Steam layout that emits gamepad controls. This project fixes the
 GFN side of the path; it cannot create gamepad reports when the active Steam
 layout only emits desktop input.
+
+### Setup stops with “Shortcut identity changed”
+
+An older installer rejected shortcuts that Steam stored as an `.app` path
+instead of the executable inside it. Version 1.1.0 accepts both forms for the
+expected GFN copy, while still rejecting unrelated applications.
+
+Update this repository, quit Steam and GFN, then rerun the preview and apply:
+
+```sh
+git pull --ff-only
+./configure-steam.py --account YOUR_ACCOUNT_ID
+./configure-steam.py --account YOUR_ACCOUNT_ID --apply
+```
+
+Keep the existing shortcut: its AppID and controller associations are preserved.
+There is no need to remove the identity check or recreate the shortcut. You can
+omit `--account` when the setup is unambiguous.
 
 ### Steam Input's virtual gamepad is not detected
 
@@ -164,6 +190,12 @@ the original user-facing path, and creates the controller profiles. It refuses
 ambiguous shortcuts and running Steam/GFN processes. Every write receives a
 dated local backup.
 
+For an existing Steam-managed installation, update the repository and rerun
+these two configuration commands to install the new launcher and native entrypoint.
+Do **not** run the default `./build.zsh` over the small launcher. If the runtime
+needs rebuilding first, use the private runtime path in the
+[update guide](docs/steam-managed-setup.md#updating-geforce-now).
+
 Open the launcher for future sessions:
 
 ```sh
@@ -180,6 +212,12 @@ the preview and apply steps:
 
 Use `--account` or `--appid` only to resolve an otherwise ambiguous local Steam
 setup. These values are read locally and are never uploaded by the scripts.
+
+To keep gyro active without holding R4, add `--gyro-activation always` to both
+configuration commands. Existing profiles can be changed with `--gyro-only`;
+use `--gyro-activation r4` to return to the default. Direct mouse gyro is the
+default output. Games must accept mouse and gamepad input together, and their
+button prompts may switch between the two.
 
 See [Steam-managed setup and recovery](docs/steam-managed-setup.md) for the
 installed paths, GFN update procedure, profile-only changes, and rollback.
