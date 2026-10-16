@@ -4,6 +4,29 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [1.1.0] - 2026-10-17
+
+### Fixed
+
+- Accept the exact GFN `.app` bundle path stored by macOS Steam, as well as
+  its executable, during configuration. Quoted and unquoted paths with spaces
+  or Unicode work; unrelated applications and ambiguous shortcuts remain rejected.
+- Preserve the shortcut AppID, other games, and existing controller associations.
+- Use a signed native ARM64 entrypoint instead of `/usr/bin/arch` for Steam launches.
+- Support fresh Steam Controller setups with only a Triton configset.
+
+### Added
+
+- Exact haptic patch signatures for GFN `2.0.89.141`.
+- Runtime verification and transactional repair after supported NVIDIA updates.
+- Player Space gyro and optional `--gyro-activation always`; R4 remains the default.
+- Optional duplicate-controller repair and Game Mode troubleshooting tools.
+  Normal community startup does not change the global Game Mode policy.
+- Installer regression coverage for bundle targets, first setup, upgrades,
+  preserved file modes, and rollback; no real Steam account is used by tests.
+
+## [1.0.0] - 2026-09-12
+
 ### Added
 
 - Steam-managed launcher that retains the native arm64 shortcut and active

@@ -3,6 +3,6 @@
   "executable": "GFNSteamLauncher",
   "name": "GeForceNOW-Steam-Controller",
   "display_name": "GeForce NOW (Steam Controller)",
-  "version": "1.0.0",
-  "build": "1"
+  "version": "1.1.0",
+  "build": "2"
 }

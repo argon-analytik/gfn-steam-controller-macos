@@ -41,7 +41,7 @@ device-probe: $(DEVICE_PROBE)
 
 syntax:
 	zsh -n build.zsh verify.zsh install.zsh uninstall.zsh \
-		build-launcher.zsh \
+		build-launcher.zsh ensure-runtime.zsh game-mode-guard.zsh \
 		reset-gfn-container.zsh repair-input-monitoring.zsh \
 		lib/app-transaction.zsh \
 		tests/test_patcher.zsh tests/test_haptic_patcher.zsh \
@@ -49,7 +49,7 @@ syntax:
 		tests/test_app_transaction.zsh
 
 test: $(PATCHER) $(HAPTIC_PATCHER) $(HAPTIC_BRIDGE) $(HAPTIC_TEST) $(DEVICE_PROBE)
-	PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s tests -p 'test_steam*.py'
+	PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s tests -p 'test_*.py'
 	zsh tests/test_patcher.zsh $(PATCHER)
 	zsh tests/test_haptic_patcher.zsh $(HAPTIC_PATCHER)
 	$(HAPTIC_TEST)

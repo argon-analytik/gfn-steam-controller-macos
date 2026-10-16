@@ -45,7 +45,7 @@ def shortcut():
 class SteamProfileTests(unittest.TestCase):
     def test_roundtrip_duplicates_unicode_escapes(self):
         rows = [('group', [('binding', 'a'), ('binding', 'b')]),
-                ('group', [('title', 'Camera "Gyro"\\Path\nÅ')])]
+                ('group', [('title', 'Kamera "Gyro"\\Pfad\nÄ')])]
         self.assertEqual(parse('\ufeff// comment\n' + dump(rows)), rows)
 
     def test_reject_malformed_text(self):
@@ -88,6 +88,7 @@ class SteamProfileTests(unittest.TestCase):
         self.assertEqual(get(settings, 'gyro_use_per_controller_preferences'), '0')
         self.assertEqual(get(settings, 'gyro_natural_sensitivity'), '50')
         self.assertEqual(get(settings, 'acceleration'), '0')
+        self.assertEqual(get(settings, 'gyro_to_2d_conversion_style'), '4')
         preset = get(root, 'preset')
         self.assertIn((get(gyro, 'id'), 'gyro active'), get(preset, 'group_source_bindings'))
 
@@ -99,7 +100,7 @@ class SteamProfileTests(unittest.TestCase):
         put(gyro, 'settings', [('gyro_ratchet_button_mask', '16777217'), ('gyro_button', '46'), ('output_joystick', '1'),
                               ('gyro_to_joystick_out_min', '5000'), ('gyro_speed_to_joystick_max', '100'),
                               ('gyro_speed_deadzone', '36'), ('gyro_precision_speed', '75')])
-        put(root, 'title', 'GFN - Gamepad + Gyro on R2')
+        put(root, 'title', 'GFN - Gamepad + Gyro bei R2')
         root.append(('custom_user_setting', 'preserve me'))
         root.append(('group', [('id', '100'), ('mode', 'switches'), ('inputs', [('binding', 'xinput_button A')])]))
         data = dump(original).encode()
@@ -118,6 +119,48 @@ class SteamProfileTests(unittest.TestCase):
         self.assertEqual(get(get(adjusted, 'settings'), 'gyro_speed_deadzone'), '0')
         self.assertEqual(get(get(adjusted, 'settings'), 'gyro_precision_speed'), '0')
         self.assertEqual(retune_gyro_profile(retune_gyro_profile(data)), retune_gyro_profile(data))
+
+    def test_always_on_changes_only_activation_and_metadata_and_can_restore_r4(self):
+        data = gamepad_profile(dump(template()), 'controller_triton', 1, Path('/tmp/test'))
+        changed = retune_gyro_profile(data, always_on=True)
+        before = get(parse(data.decode()), 'controller_mappings')
+        after = get(parse(changed.decode()), 'controller_mappings')
+        expected = copy.deepcopy(before)
+        gyro = next(g for k, g in expected if k == 'group' and get(g, 'mode') == 'gyro_to_mouse')
+        for key in ('gyro_ratchet_button_mask', 'gyro_button', 'gyro_button_invert'):
+            put(get(gyro, 'settings'), key, '0')
+        def controls(root):
+            return [(k, v) for k, v in root if k not in ('title', 'description', 'revision')]
+        self.assertEqual(controls(after), controls(expected))
+        self.assertNotIn('R4', get(after, 'title'))
+        self.assertEqual(retune_gyro_profile(changed, always_on=True), changed)
+        self.assertEqual(controls(get(parse(retune_gyro_profile(changed).decode()), 'controller_mappings')),
+                         controls(before))
+        generated = get(parse(gamepad_profile(dump(template()), 'controller_triton', 1,
+                                              Path('/tmp/test'), always_on=True).decode()), 'controller_mappings')
+        self.assertEqual(controls(generated), controls(after))
+
+    def test_joystick_gyro_preserves_controls_and_can_restore_mouse(self):
+        data = gamepad_profile(dump(template()), 'controller_triton', 1, Path('/tmp/test'), always_on=True)
+        changed = retune_gyro_profile(data, always_on=True, gyro_output='joystick')
+        before = get(parse(data.decode()), 'controller_mappings')
+        after = get(parse(changed.decode()), 'controller_mappings')
+        def other_controls(root):
+            return [(k, v) for k, v in root if k not in ('title', 'description', 'revision')
+                    and not (k == 'group' and str(get(v, 'mode')).startswith('gyro_'))]
+        self.assertEqual(other_controls(before), other_controls(after))
+        gyro = next(g for k, g in after if k == 'group' and get(g, 'mode') == 'gyro_to_joystick')
+        settings = get(gyro, 'settings')
+        for key, value in [('output_joystick', '1'), ('gyro_ratchet_button_mask', '0'),
+                           ('gyro_button', '0'), ('gyro_button_invert', '0'),
+                           ('gyro_to_2d_conversion_style', '4'), ('gyro_speed_to_joystick_min', '0'),
+                           ('gyro_to_joystick_enable_angle_catchup', '0')]:
+            self.assertEqual(get(settings, key), value)
+        self.assertFalse(any(k == 'group' and get(v, 'mode') == 'gyro_to_mouse' for k, v in after))
+        self.assertEqual(retune_gyro_profile(changed, always_on=True, gyro_output='joystick'), changed)
+        restored = get(parse(retune_gyro_profile(changed, always_on=True, gyro_output='mouse').decode()), 'controller_mappings')
+        self.assertEqual([(k, v) for k, v in restored if k != 'revision'],
+                         [(k, v) for k, v in before if k != 'revision'])
 
     def test_retune_rejects_foreign_or_ambiguous_profile(self):
         data = gamepad_profile(dump(template()), 'controller_triton', 1, Path('/tmp/test'))
@@ -162,7 +205,7 @@ class SteamProfileTests(unittest.TestCase):
     def test_binary_changes_only_two_path_strings(self):
         rows = shortcut()
         before = binary(rows)
-        runtime = Path('/tmp/Test Person/Application Support/GFN.app')
+        runtime = Path('/Users/Test Person/Library/Application Support/GFN.app')
         changed = patch_shortcut(before, 3000000000, runtime)
         expected = copy.deepcopy(rows)
         entry = expected[0][1][0][1]
@@ -171,14 +214,21 @@ class SteamProfileTests(unittest.TestCase):
         self.assertEqual(changed, binary(expected))
         self.assertEqual(patch_shortcut(changed, 3000000000, runtime), changed)
 
-    def test_binary_accepts_new_direct_app_shortcut_and_routes_through_arch(self):
+    def test_native_entry_migration_preserves_id_and_other_shortcuts(self):
         rows = shortcut()
-        visible = Path('/tmp/Applications/GeForceNOW-Steam-Controller.app')
-        rows[0][1][0][1][2] = ('Exe', '"' + str(visible/'Contents/MacOS/GeForceNOW') + '"')
-        changed = shortcut_spans(patch_shortcut(binary(rows), 3000000000, Path('/tmp/runtime.app'), visible))
-        entry = {key.lower(): value for key, _, value, _, _ in changed[0][2][0][2]}
-        self.assertEqual(entry['exe'], '"/usr/bin/arch"')
-        self.assertEqual(entry['launchoptions'], '-arm64 "/tmp/runtime.app/Contents/MacOS/GeForceNOW"')
+        runtime = Path('/Users/Test Person/Library/Application Support/GFN.app')
+        entry = runtime.parent / 'steam-gfn-entry'
+        result = patch_shortcut(binary(rows), 3000000000, runtime, entry)
+        expected = copy.deepcopy(rows)
+        fields = expected[0][1][0][1]
+        fields[2] = ('Exe', '"' + str(entry) + '"')
+        fields[3] = ('StartDir', '"' + str(runtime/'Contents/MacOS') + '"')
+        fields[4] = ('LaunchOptions', '"' + str(runtime/'Contents/MacOS/GeForceNOW') + '"')
+        self.assertEqual(result, binary(expected))
+        # Later gyro/install validation must keep the repaired launch route.
+        self.assertEqual(patch_shortcut(result, 3000000000, runtime), result)
+        with self.assertRaises(ValueError):
+            patch_shortcut(result, 3000000000, runtime, Path('/unexpected'))
 
     def test_binary_refuses_wrong_identity_or_duplicate(self):
         rows = shortcut()
@@ -187,6 +237,34 @@ class SteamProfileTests(unittest.TestCase):
             patch_shortcut(binary(rows), 3000000000, Path('/tmp/a'))
         with self.assertRaises(ValueError):
             patch_shortcut(binary(shortcut()), 3000000001, Path('/tmp/a'))
+
+    def test_finder_added_app_bundle_and_binary_keep_shortcut_identity(self):
+        visible = Path('/Users/Test Å Person/Applications/GeForceNOW-Steam-Controller.app')
+        runtime = Path('/tmp/private runtime/GeForceNOW-Steam-Controller.app')
+        native = runtime.parent / 'steam-gfn-entry'
+        for target in [visible, visible/'Contents/MacOS/GeForceNOW', runtime, runtime/'Contents/MacOS/GeForceNOW']:
+            for quoted in (False, True):
+                with self.subTest(target=target, quoted=quoted):
+                    rows = shortcut()
+                    fields = rows[0][1][0][1]
+                    fields[2] = ('Exe', '"'+str(target)+'"' if quoted else str(target))
+                    result = patch_shortcut(binary(rows), 3000000000, runtime, native, visible=visible)
+                    expected = copy.deepcopy(rows)
+                    fields = expected[0][1][0][1]
+                    fields[2] = ('Exe', '"'+str(native)+'"')
+                    fields[3] = ('StartDir', '"'+str(runtime/'Contents/MacOS')+'"')
+                    fields[4] = ('LaunchOptions', '"'+str(runtime/'Contents/MacOS/GeForceNOW')+'"')
+                    self.assertEqual(result, binary(expected))
+                    self.assertEqual(patch_shortcut(result, 3000000000, runtime, native, visible=visible), result)
+
+    def test_bundle_support_still_rejects_foreign_apps_and_appended_arguments(self):
+        visible = Path('/tmp/Applications/GeForceNOW-Steam-Controller.app')
+        for target in ['/tmp/Other.app', str(visible)+'.old', str(visible)+'/Contents/MacOS/Other',
+                       '"'+str(visible)+'" --extra', '"'+str(visible), str(visible)+'"']:
+            rows = shortcut()
+            rows[0][1][0][1][2] = ('Exe', target)
+            with self.subTest(target=target), self.assertRaisesRegex(ValueError, 'Shortcut identity'):
+                patch_shortcut(binary(rows), 3000000000, Path('/tmp/runtime.app'), visible=visible)
 
     def test_binary_refuses_incomplete_or_extra_data(self):
         data = binary(shortcut())
